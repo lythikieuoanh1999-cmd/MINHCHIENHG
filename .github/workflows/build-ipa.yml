@@ -1,52 +1,76 @@
-name: KENIOS
-options:
-  bundleIdPrefix: com.kenios
-  deploymentTarget:
-    iOS: "16.0"
-  createIntermediateGroups: true
+name: Build unsigned IPA
 
-targets:
-  KENIOS:
-    type: application
-    platform: iOS
-    deploymentTarget: "16.0"
-    sources:
-      - path: Sources
-    info:
-      path: Sources/Info.plist
-      properties:
-        CFBundleDisplayName: KENIOS
-        CFBundleName: KENIOS
-        CFBundleShortVersionString: "3.0"
-        CFBundleVersion: "1"
-        LSRequiresIPhoneOS: true
-        UILaunchScreen: {}
-        UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
-        NSCameraUsageDescription: "Cho phép chụp ảnh để đính kèm vào chat AI."
-        NSPhotoLibraryUsageDescription: "Cho phép đính ảnh từ thư viện vào chat AI."
-        NSMicrophoneUsageDescription: "Cho phép thu âm để chuyển giọng nói thành văn bản."
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.kenios.codebox
-        MARKETING_VERSION: "3.0"
-        CURRENT_PROJECT_VERSION: "1"
-        TARGETED_DEVICE_FAMILY: "1,2"
-        SWIFT_VERSION: "5.0"
-        GENERATE_INFOPLIST_FILE: NO
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        DEVELOPMENT_TEAM: ""
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGN_IDENTITY: ""
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Cần Xcode mới (SDK iOS 26) để biên dịch hiệu ứng Liquid Glass (GlassKit.swift)
+      - name: Select latest Xcode (26.x)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Xcode & Swift version
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -eo pipefail
+          xcodegen generate
+          ls -la
+
+      - name: Show available schemes
+        run: xcodebuild -list -project KENIOS.xcodeproj
+
+      - name: Build (no code signing)
+        run: |
+          set -eo pipefail
+          xcodebuild \
+            -project KENIOS.xcodeproj \
+            -scheme KENIOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Package into unsigned .ipa
+        run: |
+          set -eo pipefail
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Không tìm thấy file .app sau khi build."
+            find build/Build/Products -maxdepth 3
+            exit 1
+          fi
+          echo "App: $APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r KENIOS-unsigned.ipa Payload >/dev/null
+          ls -lh KENIOS-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KENIOS-unsigned-ipa
+          path: KENIOS-unsigned.ipa
+          if-no-files-found: error
